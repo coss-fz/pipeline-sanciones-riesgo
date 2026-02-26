@@ -186,3 +186,67 @@ def mark_deleted(conn:sqlite3.Connection, fuente:str, current_ids:set) -> int:
             list(deleted_ids)
         )
     return len(deleted_ids)
+
+
+def get_all_sanctions(conn:sqlite3.Connection) -> List[Dict]:
+    """Retorna todos los registros activos de sanciones"""
+    rows = conn.execute(
+        "SELECT * FROM sanctions WHERE estado_carga != 'ELIMINADO'"
+    ).fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        d["aliases"] = json.loads(d.get("aliases") or "[]")
+        d["nacionalidad"] = json.loads(d.get("nacionalidad") or "[]")
+        result.append(d)
+    return result
+
+
+def insert_terceros(conn:sqlite3.Connection, records:List[Dict]) -> None:
+    """Inserta la base sintética de terceros"""
+    conn.executemany("""
+        INSERT OR REPLACE INTO terceros (
+            id_tercero, tipo_sujeto, nombres, apellidos, fecha_nacimiento,
+            nacionalidad, numero_documento, tipo_documento, pais_residencia,
+            es_match_plantado, tipo_match_plantado
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    """, [
+        (
+            r["id_tercero"], r["tipo_sujeto"], r["nombres"], r.get("apellidos"),
+            r.get("fecha_nacimiento"), r.get("nacionalidad"), r.get("numero_documento"),
+            r.get("tipo_documento"), r.get("pais_residencia"),
+            int(r.get("es_match_plantado", 0)), r.get("tipo_match_plantado")
+        )
+        for r in records
+    ])
+
+
+def insert_alert(conn:sqlite3.Connection, alert:Dict) -> None:
+    """Inserta las alertas"""
+    conn.execute("""
+        INSERT INTO match_alerts (
+            id_tercero, id_registro, fuente, tipo_match, score_similitud,
+            nombre_tercero, nombre_lista, requiere_revision, timestamp
+        ) VALUES (?,?,?,?,?,?,?,?,?)
+    """, (
+        alert["id_tercero"], alert["id_registro"], alert["fuente"],
+        alert["tipo_match"], alert.get("score_similitud"),
+        alert.get("nombre_tercero"), alert.get("nombre_lista"),
+        int(alert.get("requiere_revision", False)), alert.get("timestamp")
+    ))
+
+
+def log_ingestion(conn:sqlite3.Connection, log:Dict) -> None:
+    """Tabla que sirve como reporte de cada ingestión realizada"""
+    conn.execute("""
+        INSERT INTO ingestion_log (
+            fuente, timestamp_inicio, timestamp_fin, registros_total,
+            registros_nuevos, registros_modificados, registros_eliminados,
+            errores, duracion_segundos, estado
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+    """, (
+        log["fuente"], log["timestamp_inicio"], log.get("timestamp_fin"),
+        log.get("registros_total", 0), log.get("registros_nuevos", 0),
+        log.get("registros_modificados", 0), log.get("registros_eliminados", 0),
+        log.get("errores", 0), log.get("duracion_segundos"), log.get("estado", "OK")
+    ))

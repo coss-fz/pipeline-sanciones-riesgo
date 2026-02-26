@@ -3,10 +3,13 @@ Descarga robusta de fuentes con reintentos y manejo de errores
 """
 
 import time
+import os
 from typing import Optional, Dict
 import requests
 
 from pipeline.utils import get_logger
+
+
 
 
 logger = get_logger("downloader")

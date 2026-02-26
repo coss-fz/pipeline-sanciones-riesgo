@@ -1,0 +1,50 @@
+{
+  "run_timestamp": "2026-02-26T09:51:14.364082",
+  "records_per_source": {
+    "OFAC": 18703,
+    "UN": 1003,
+    "EU": 0,
+    "FCPA": 0,
+    "PACO_DISC": 24315,
+    "PACO_PENAL": 3902,
+    "WORLD_BANK": 9
+  },
+  "nuevos_per_source": {
+    "OFAC": 18703,
+    "UN": 1003,
+    "PACO_DISC": 24315,
+    "PACO_PENAL": 3902,
+    "WORLD_BANK": 9
+  },
+  "modificados_per_source": {
+    "OFAC": 0,
+    "UN": 0,
+    "PACO_DISC": 0,
+    "PACO_PENAL": 0,
+    "WORLD_BANK": 0
+  },
+  "eliminados_per_source": {
+    "OFAC": 0,
+    "UN": 0,
+    "PACO_DISC": 0,
+    "PACO_PENAL": 0,
+    "WORLD_BANK": 0
+  },
+  "errores_per_source": {
+    "OFAC": 0,
+    "UN": 0,
+    "EU": 1,
+    "FCPA": 1,
+    "PACO_DISC": 0,
+    "PACO_PENAL": 0,
+    "WORLD_BANK": 0
+  },
+  "duracion_per_source": {
+    "OFAC": 11.17,
+    "UN": 2.98,
+    "PACO_DISC": 6.68,
+    "PACO_PENAL": 1.44,
+    "WORLD_BANK": 0.67
+  },
+  "duration_seconds": 26.05
+}
