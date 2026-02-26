@@ -1,9 +1,5 @@
 """
 Pipeline principal de sanciones
-    python run_pipeline.py --env local
-    python run_pipeline.py --env local --skip-download      # usa caché
-    python run_pipeline.py --env local --only-matching      # solo matching
-    python run_pipeline.py --env local --sources OFAC,UN    # fuentes específicas
 """
 
 import argparse
@@ -19,7 +15,7 @@ import csv
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from pipeline.utils import get_logger # pylint: disable=wrong-import-position
-from pipeline.downloader import download_bytes # pylint: disable=wrong-import-position
+from pipeline.downloader import download_files # pylint: disable=wrong-import-position
 from pipeline.normalizacion.db import (  # pylint: disable=wrong-import-position
     initialize, get_connection, upsert_sanctions,
     mark_deleted, get_all_sanctions, insert_terceros,
@@ -27,6 +23,8 @@ from pipeline.normalizacion.db import (  # pylint: disable=wrong-import-position
 )
 from pipeline.calidad.monitoring import MonitoringSystem # pylint: disable=wrong-import-position
 from pipeline.calidad.rules import run_quality # pylint: disable=wrong-import-position
+from pipeline.matching.engine import MatchingEngine, compute_precision_recall # pylint: disable=wrong-import-position
+from pipeline.matching.synthetic import gen_synthetic # pylint: disable=wrong-import-position
 from pipeline.fuentes.fcpa import parse_page # pylint: disable=wrong-import-position
 from pipeline.fuentes.paco import parse_disc, parse_penal # pylint: disable=wrong-import-position
 from pipeline.fuentes.worldbank import web_scraper # pylint: disable=wrong-import-position
@@ -42,8 +40,8 @@ CONFIGS = {
         "db_path": "data/sanctions.db",
         "raw_dir": "data/raw",
         "output_dir": "reportes",
-        "match_threshold_high": 0.92,
-        "match_threshold_low": 0.80,
+        "match_threshold_high": 0.80, # 0.92
+        "match_threshold_low": 0.60, # 0.80
     }
 }
 
@@ -96,7 +94,7 @@ def _ingest_xml(source_name, config, raw_dir, skip_download, module_path):
         with open(cache, "rb") as f:
             raw = f.read()
     else:
-        raw = download_bytes(config["url"])
+        raw = download_files(config["url"])
         if raw is None:
             logger.error("%s: descarga fallida", source_name)
             return []
@@ -119,7 +117,7 @@ def _ingest_fcpa(config, raw_dir, skip_download):
             with open(cache, "rb") as f:
                 raw = f.read()
         else:
-            raw = download_bytes(base_url + f"&from={page * page_size}&hits.hits._source=true")
+            raw = download_files(base_url + f"&from={page * page_size}&hits.hits._source=true")
             if raw is None:
                 break
             os.makedirs(raw_dir, exist_ok=True)
@@ -147,7 +145,7 @@ def _ingest_paco_disc(config, raw_dir, skip_download):
         with open(cache, "rb") as f:
             raw = f.read()
     else:
-        raw = download_bytes(config["url"])
+        raw = download_files(config["url"])
         if raw is None:
             return []
         os.makedirs(raw_dir, exist_ok=True)
@@ -162,7 +160,7 @@ def _ingest_paco_penal(config, raw_dir, skip_download):
         with open(cache, "rb") as f:
             raw = f.read()
     else:
-        raw = download_bytes(config["url"])
+        raw = download_files(config["url"])
         if raw is None:
             return []
         os.makedirs(raw_dir, exist_ok=True)
@@ -221,21 +219,6 @@ def save_csv(records: List[Dict], path: str) -> None:
         writer.writeheader()
         writer.writerows(records)
     logger.info("CSV guardado: '%s' (%d registros)", path, len(records))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -356,115 +339,107 @@ def main():
         save_report(quality_report, os.path.join(cfg["output_dir"], "reporte_calidad.json"))
 
 
-    # # -----------------------------------------------------------------------
-    # # PARTE 2: Generación de base sintética y matching
-    # # -----------------------------------------------------------------------
-    # logger.info(f"{'='*60}")
-    # logger.info("PARTE 2: Base sintética y matching masivo")
+    # -------------------- PARTE 2: Generación de base sintética y matching --------------------
+    logger.info("="*60)
+    logger.info("PARTE 2: Base sintética y matching masivo")
 
-    # conn = get_connection(cfg["db_path"])
-    # sanctions = get_all_sanctions(conn)
-    # logger.info(f"Sanciones en DB: {len(sanctions)}")
+    conn = get_connection(cfg["db_path"])
+    sanctions = get_all_sanctions(conn)
+    logger.info("Sanciones en DB: %d", len(sanctions))
 
-    # # Generar base sintética
-    # synthetic_path = "data/terceros.csv"
-    # mapa_path = "data/mapa_plantados.json"
+    # Generar base sintética
+    synthetic_path = "data/terceros.csv"
+    mapa_path = "data/mapa_plantados.json"
 
-    # if not os.path.exists(synthetic_path) or not args.skip_download:
-    #     logger.info("Generando base sintética de 10.000 terceros…")
-    #     terceros, mapa_plantados = gen_synthetic(sanctions, seed=42)
-    #     save_csv(terceros, synthetic_path)
-    #     with open(mapa_path, "w", encoding="utf-8") as f:
-    #         json.dump(mapa_plantados, f, ensure_ascii=False, indent=2)
-    #     logger.info(f"Base sintética generada: {len(terceros)} registros, "
-    #                 f"{len(mapa_plantados)} plantados")
-    # else:
-    #     logger.info(f"Cargando base sintética desde {synthetic_path}…")
-    #     terceros = []
-    #     with open(synthetic_path, newline="", encoding="utf-8") as f:
-    #         reader = csv.DictReader(f)
-    #         for row in reader:
-    #             row["es_match_plantado"] = int(row.get("es_match_plantado", 0))
-    #             terceros.append(row)
-    #     with open(mapa_path, encoding="utf-8") as f:
-    #         mapa_plantados = json.load(f)
+    if not os.path.exists(synthetic_path) or not args.skip_download:
+        logger.info("Generando base sintética de 10.000 terceros…")
+        terceros, mapa_plantados = gen_synthetic(sanctions, seed=42)
+        save_csv(terceros, synthetic_path)
+        with open(mapa_path, "w", encoding="utf-8") as f:
+            json.dump(mapa_plantados, f, ensure_ascii=False, indent=2)
+        logger.info("Base sintética generada: %d registros, %d plantados",
+                    len(terceros), len(mapa_plantados))
+    else:
+        logger.info("Cargando base sintética desde '%s'…", synthetic_path)
+        terceros = []
+        with open(synthetic_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                row["es_match_plantado"] = int(row.get("es_match_plantado", 0))
+                terceros.append(row)
+        with open(mapa_path, encoding="utf-8") as f:
+            mapa_plantados = json.load(f)
 
-    # # Persistir terceros en DB
-    # with conn:
-    #     insert_terceros(conn, terceros)
+    # Persistir terceros en DB
+    with conn:
+        insert_terceros(conn, terceros)
 
-    # # Matching masivo
-    # logger.info("Iniciando matching masivo…")
-    # t_match = time.time()
+    # Matching masivo
+    logger.info("Iniciando matching masivo…")
+    t_match = time.time()
 
-    # engine = MatchingEngine(
-    #     threshold_high=CONFIGS[args.env]["match_threshold_high"],
-    #     threshold_low=CONFIGS[args.env]["match_threshold_low"],
-    # )
-    # engine.load_sanctions(sanctions)
-    # alerts, match_metrics = engine.run_batch(terceros)
+    engine = MatchingEngine(
+        threshold_high=CONFIGS[args.env]["match_threshold_high"],
+        threshold_low=CONFIGS[args.env]["match_threshold_low"],
+    )
+    engine.load_sanctions(sanctions)
+    alerts, match_metrics = engine.run_batch(terceros)
 
-    # match_duration = time.time() - t_match
-    # match_metrics["tiempo_segundos"] = round(match_duration, 2)
+    match_duration = time.time() - t_match
+    match_metrics["tiempo_segundos"] = round(match_duration, 2)
 
-    # # Persistir alertas
-    # with conn:
-    #     for alert in alerts:
-    #         insert_alert(conn, alert)
+    # Persistir alertas
+    with conn:
+        for alert in alerts:
+            insert_alert(conn, alert)
 
-    # # Métricas de precisión/recall sobre plantados
-    # planted = [t for t in terceros if int(t.get("es_match_plantado", 0)) == 1]
-    # pr_metrics = compute_precision_recall(alerts, planted, terceros)
-    # logger.info(
-    #     f"Precisión: {pr_metrics['precision']:.3f} | "
-    #     f"Recall: {pr_metrics['recall']:.3f} | "
-    #     f"F1: {pr_metrics['f1']:.3f} | "
-    #     f"TP={pr_metrics['tp']} FP={pr_metrics['fp']} FN={pr_metrics['fn']}"
-    # )
+    # Métricas de precisión/recall sobre plantados
+    planted = [t for t in terceros if int(t.get("es_match_plantado", 0)) == 1]
+    pr_metrics = compute_precision_recall(alerts, planted)
+    logger.info("Precisión: %.4f | Recall: %.4f | F1: %.4f | TP=%s FP=%s FN=%s",
+        pr_metrics["precision"], pr_metrics["recall"], pr_metrics["f1"],
+        pr_metrics["tp"], pr_metrics["fp"], pr_metrics["fn"])
 
-    # # Reporte de alertas
-    # alert_report = {
-    #     "run_timestamp": run_ts,
-    #     "metricas": match_metrics,
-    #     "precision_recall": pr_metrics,
-    #     "total_alertas": len(alerts),
-    #     "alertas_por_tipo": {},
-    #     "alertas_por_fuente": {},
-    #     "alertas_sample": alerts[:10],
-    # }
-    # for a in alerts:
-    #     t = a["tipo_match"]
-    #     alert_report["alertas_por_tipo"][t] = alert_report["alertas_por_tipo"].get(t, 0) + 1
-    #     f = a["fuente"]
-    #     alert_report["alertas_por_fuente"][f] = alert_report["alertas_por_fuente"].get(f, 0) + 1
+    # Reporte de alertas
+    alert_report = {
+        "run_timestamp": run_ts,
+        "metricas": match_metrics,
+        "precision_recall": pr_metrics,
+        "total_alertas": len(alerts),
+        "alertas_por_tipo": {},
+        "alertas_por_fuente": {},
+        "alertas_sample": alerts[:10],
+    }
+    for a in alerts:
+        t = a["tipo_match"]
+        alert_report["alertas_por_tipo"][t] = alert_report["alertas_por_tipo"].get(t, 0) + 1
+        f = a["fuente"]
+        alert_report["alertas_por_fuente"][f] = alert_report["alertas_por_fuente"].get(f, 0) + 1
 
-    # save_report(alert_report, os.path.join(cfg["output_dir"], "reporte_alertas.json"))
-    # save_csv(alerts, os.path.join(cfg["output_dir"], "alertas.csv"))
+    save_report(alert_report, os.path.join(cfg["output_dir"], "reporte_alertas.json"))
+    save_csv(alerts, os.path.join(cfg["output_dir"], "alertas.csv"))
 
-    # # Monitoreo final
-    # monitor.record_matching(match_metrics)
-    # fired_alerts = monitor.evaluate_alerts()
-    # monitoring_report = monitor.generate_report()
-    # save_report(monitoring_report, os.path.join(cfg["output_dir"], "reporte_monitoreo.json"))
+    # Monitoreo final
+    monitor.record_matching(match_metrics)
+    fired_alerts = monitor.evaluate_alerts()
+    monitoring_report = monitor.generate_report()
+    save_report(monitoring_report, os.path.join(cfg["output_dir"], "reporte_monitoreo.json"))
 
-    # conn.close()
+    conn.close()
 
-    # # -----------------------------------------------------------------------
-    # # Resumen final
-    # # -----------------------------------------------------------------------
-    # total_duration = time.time() - t_pipeline_start
-    # logger.info(f"{'='*60}")
-    # logger.info(f"PIPELINE COMPLETADO en {total_duration:.1f}s")
-    # logger.info(f"Fuentes procesadas: {len(ingestion_summary.get('records_per_source', {}))}")
-    # logger.info(f"Total sanciones en DB: {len(sanctions)}")
-    # logger.info(f"Terceros sintéticos: {len(terceros)}")
-    # logger.info(f"Alertas generadas: {len(alerts)}")
-    # logger.info(
-    #     f"Precision={pr_metrics['precision']:.3f} Recall={pr_metrics['recall']:.3f} "
-    #     f"F1={pr_metrics['f1']:.3f}"
-    # )
-    # logger.info(f"Alertas operacionales disparadas: {len(fired_alerts)}")
-    # logger.info(f"{'='*60}")
+
+    # -------------------- Resumen final --------------------
+    total_duration = time.time() - t_pipeline_start
+    logger.info("="*60)
+    logger.info("PIPELINE COMPLETADO en %.1fs", total_duration)
+    logger.info("Fuentes procesadas: %d", len(ingestion_summary.get("records_per_source", {})))
+    logger.info("Total sanciones en DB: %d", len(sanctions))
+    logger.info("Terceros sintéticos: %d", len(terceros))
+    logger.info("Alertas generadas: %d", len(alerts))
+    logger.info("Precision=%.3f Recall=%.3f F1=%.3f",
+        pr_metrics["precision"], pr_metrics["recall"], pr_metrics["f1"])
+    logger.info("Alertas operacionales disparadas: %d", len(fired_alerts))
+    logger.info("="*60)
 
 
 if __name__ == "__main__":

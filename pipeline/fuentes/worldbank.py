@@ -9,7 +9,7 @@ from typing import List, Dict, Tuple
 from bs4 import BeautifulSoup
 
 from pipeline.utils import build_canonical, normalize_countries, get_logger, parse_date
-from pipeline.downloader import download_bytes
+from pipeline.downloader import download_files
 
 
 
@@ -129,7 +129,7 @@ def web_scraper(url:str, max_pages:int=200) -> List[Dict]:
 
     for page_num in range(1, max_pages + 1):
         logger.info("WorldBank: scraping página %s — %s", page_num, current_url)
-        raw = download_bytes(current_url, retries=3, timeout=30)
+        raw = download_files(current_url, retries=3, timeout=30)
         if raw is None:
             logger.error("WorldBank: fallo descargando página %s", page_num)
             break

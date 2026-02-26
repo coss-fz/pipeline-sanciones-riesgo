@@ -3,7 +3,6 @@ Descarga robusta de fuentes con reintentos y manejo de errores
 """
 
 import time
-import os
 from typing import Optional, Dict
 import requests
 
@@ -19,7 +18,7 @@ DEFAULT_RETRIES = 5
 DEFAULT_BACKOFF = 2   # multiplicador exponencial
 
 
-def download_bytes(
+def download_files(
     url:str,
     retries:int=DEFAULT_RETRIES,
     timeout:int=DEFAULT_TIMEOUT,
