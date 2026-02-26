@@ -40,7 +40,7 @@ CONFIGS = {
         "db_path": "data/sanctions.db",
         "raw_dir": "data/raw",
         "output_dir": "reportes",
-        "match_threshold_high": 0.80, # 0.92
+        "match_threshold_high": 0.92, # 0.92
         "match_threshold_low": 0.60, # 0.80
     }
 }
